@@ -410,6 +410,7 @@ class Scene {
             if ($key.VirtualKeyCode -eq $script:KeyCodes["Down"] -and $key.KeyDown) {
                 $this.GameWon()
             }
+
         }
     }
 
