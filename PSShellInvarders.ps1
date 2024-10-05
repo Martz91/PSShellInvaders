@@ -3,15 +3,8 @@ $RawUI = $Host.UI.RawUI
 $RawUI.BufferSize = [System.Management.Automation.Host.Size]::new(120, 30)
 $RawUI.WindowSize = [System.Management.Automation.Host.Size]::new(120, 30)
 
-$PlayerGraphics = New-Object -TypeName 'char[,]' 3, 2
-$PlayerGraphics[0, 0] = ' '
-$PlayerGraphics[0, 1] = '█'
-$PlayerGraphics[1, 0] = '▲'
-$PlayerGraphics[1, 1] = '█'
-$PlayerGraphics[2, 0] = ' '
-$PlayerGraphics[2, 1] = '█'
-
 $script:KeyCodes = @{
+    "Escape" = 27
     "Left"  = 37
     "Up"    = 38
     "Right" = 39
@@ -80,19 +73,19 @@ class GameObject {
 
 
     [void]MoveLeft([float]$DeltaTime) {
-        $this.X -= $this.Speed
+        $this.X -= $this.Speed * $DeltaTime
     }
 
     [void]MoveUp([float]$DeltaTime) {
-        $this.Y -= $this.Speed
+        $this.Y -= $this.Speed * $DeltaTime
     }
 
     [void]MoveRight([float]$DeltaTime) {
-        $this.X += $this.Speed
+        $this.X += $this.Speed * $DeltaTime
     }
 
     [void]MoveDown([float]$DeltaTime) {
-        $this.Y += $this.Speed
+        $this.Y += $this.Speed * $DeltaTime
     }
 
     [char[, ]]getGraphics() {
@@ -114,7 +107,7 @@ class Rocket : GameObject {
     Rocket([int]$x, [int]$y) : base($x, $y) {
         $this.X = [float]$x
         $this.Y = [float]$y
-        $this.Speed = 1
+        $this.Speed = 8
 
         $Graphics = New-Object -TypeName 'char[,]' 1, 1
         $Graphics[0, 0] = '|'
@@ -158,17 +151,27 @@ class Rocket : GameObject {
 class Player : GameObject {
     [Rocket]$Rocket
 
-    Player([int]$x, [int]$y, [int]$speed, [char[, ]]$graphics, [Rocket]$rocket) : base($x, $y, $speed, $graphics) {
+    Player([int]$x, [int]$y, [int]$speed, [Rocket]$rocket) : base($x, $y, $speed) {
         $this.X = [float]$x
         $this.Y = [float]$y
         $this.Speed = $speed
-        $this.Graphics = $graphics
         $this.Rocket = $rocket
+        $this.Width = 3
+        $this.Height = 2
+
+        $PlayerGraphics = New-Object -TypeName 'char[,]' 3, 2
+        $PlayerGraphics[0, 0] = ' '
+        $PlayerGraphics[0, 1] = '█'
+        $PlayerGraphics[1, 0] = '▲'
+        $PlayerGraphics[1, 1] = '█'
+        $PlayerGraphics[2, 0] = ' '
+        $PlayerGraphics[2, 1] = '█'
+        $this.Graphics = $PlayerGraphics
     }
 
     [void]ShootRocket() {
         if (-not $this.Rocket.InFlight) {
-            $this.Rocket.Launch($this.X + 1, $this.Y - 1)
+            $this.Rocket.Launch($this.GetX() + 1, $this.GetY() - 1)
         }
         
     }
@@ -182,20 +185,18 @@ class SmallInvader : GameObject {
         $this.X = [float]$x
         $this.Y = [float]$y
         $this.Speed = $speed
-        $this.Direction = $direction
-        $this.HiveMind = $hiveMind
+        $this.Width = 2
+        $this.Height = 2
 
         $Graphics = New-Object -TypeName 'char[,]' 2, 2
         $Graphics[0, 0] = '■'
         $Graphics[0, 1] = '╝'
         $Graphics[1, 0] = '■'
         $Graphics[1, 1] = '╚'
+        $this.Graphics = $Graphics
 
-        $this.Width = 2
-        $this.Height = 2
-
-
-        $this.Graphics = $graphics
+        $this.Direction = $direction
+        $this.HiveMind = $hiveMind
     }
 
     [void]MoveHorizontal([float]$DeltaTime, [Scene]$Scene) {
@@ -215,11 +216,11 @@ class SmallInvader : GameObject {
     }
 
     [void]MoveDown([float]$DeltaTime, [Scene]$Scene) {
-        if ($this.Y + 1 -ge $Scene.Height - 3) {
+        if ($this.GetY() + 1 -ge $Scene.Height - 3) {
             $Scene.GameOver()
         }
         else {
-            $this.Y += 1
+            $this.SetY($this.GetY() + 1)
             $this.Direction *= -1
         }
         
@@ -233,6 +234,7 @@ class SmallInvader : GameObject {
         if ($GameObject.GetType() -eq [Rocket]) {
             # Explode
             $this.IsActive = $false
+            $this.HiveMind.SignalDestroyed()
         }
     }
 }
@@ -274,14 +276,20 @@ class HiveMind {
         $this.MoveDownPending = $true
     }
 
-    [void]Advance([float]$DeltaTime, [Scene]$Scene) {
+    [void]Update([float]$DeltaTime, [Scene]$Scene) {
         if ($this.MoveDownPending) {
             foreach ($Invader in $this.Invaders) {
                 $Invader.MoveDown($DeltaTime, $Scene)
             }
             $this.MoveDownPending = $false
         }
-        
+    }
+
+    [void]SignalDestroyed() {
+        $ActiveInvaders = ($this.Invaders.Where({$_.IsActive})).Count
+        if($ActiveInvaders -eq 0) {
+            $this.Scene.GameWon()
+        }
     }
 }
 
@@ -292,8 +300,8 @@ class Scene {
     [System.Management.Automation.Host.PSHostRawUserInterface]$RawUI
     [object[, ]]$World
     [System.Collections.ArrayList]$NonPlayerObjects
+    [HiveMind]$HiveMind
     [bool]$IsRunning
-
 
     Scene([Player]$player, [System.Management.Automation.Host.PSHostRawUserInterface]$rawUI) {
         $this.Player = $player
@@ -302,6 +310,7 @@ class Scene {
         $this.RawUI = $rawUI
         $this.World = New-Object 'object[,]' $rawUI.BufferSize.Width, $rawUI.BufferSize.Height
         $this.NonPlayerObjects = New-Object System.Collections.ArrayList
+        $this.HiveMind = [HiveMind]::new($this)
         $this.InitializeWorld()
         $this.IsRunning = $true
     }
@@ -315,6 +324,8 @@ class Scene {
                 $this.World[$x, $y] = ' '
             }
         }
+
+        $this.HiveMind.PrepareInvasion()
     }
 
     [System.Management.Automation.Host.BufferCell[, ]]GetBuffer() {
@@ -324,8 +335,9 @@ class Scene {
         $BufferCellType = [System.Management.Automation.Host.BufferCellType]::Complete
 
         $PlayerGraphics = $this.Player.getGraphics()
-        $PlayerHeight = $PlayerGraphics.GetLength(1)
-        $PlayerWidth = $PlayerGraphics.GetLength(0)
+        $PlayerWidth = $this.Player.Width
+        $PlayerHeight = $this.Player.Height
+        
 
         $PlayerColor = [System.ConsoleColor]::Gray
 
@@ -347,6 +359,7 @@ class Scene {
             }
         }
 
+        # Draw non player objects
         foreach ($GameObject in $this.NonPlayerObjects) {
             if ($GameObject.IsActive) {
                 for ($x = 0; $x -lt $GameObject.Graphics.GetLength(0); $x++) {
@@ -366,6 +379,8 @@ class Scene {
         foreach ($GameObject in $this.NonPlayerObjects) {
             $GameObject.Update($DeltaTime, $Scene)
         }
+
+        $this.HiveMind.Update($DeltaTime, $Scene)
 
         # Handle input
         if ($this.RawUI.KeyAvailable) {
@@ -387,9 +402,13 @@ class Scene {
             }
     
             # ESCape key
-            if ($key.VirtualKeyCode -eq 27 ) { 
+            if ($key.VirtualKeyCode -eq $script:KeyCodes["Escape"] ) { 
                 Write-Host "Game ended by User"
                 $this.IsRunning = $false
+            }
+
+            if ($key.VirtualKeyCode -eq $script:KeyCodes["Down"] -and $key.KeyDown) {
+                $this.GameWon()
             }
         }
     }
@@ -406,8 +425,23 @@ class Scene {
     }
 
     [void]GameOver() {
-        [System.Console]::Beep(2000, 2000)
+        $this.RawUI.CursorPosition = @{X=($this.RawUI.BufferSize.Width/2) - 5; Y = $this.RawUI.BufferSize.Height / 2}
         Write-Host "Game Over"
+        [System.Console]::Beep(500,400)
+        [System.Console]::Beep(400,400)
+        [System.Console]::Beep(300,800)
+        $this.IsRunning = $false
+    }
+
+    [void]GameWon() {
+        $this.RawUI.CursorPosition = @{X=($this.RawUI.BufferSize.Width/2) - 4; Y = $this.RawUI.BufferSize.Height / 2}
+        Write-Host "You won"
+        [System.Console]::Beep(800,200)
+        [System.Console]::Beep(1000,200)
+        [System.Console]::Beep(1200,200)
+        [System.Console]::Beep(1600,400)
+        [System.Console]::Beep(1200,200)
+        [System.Console]::Beep(1600,600)
         $this.IsRunning = $false
     }
 
@@ -418,36 +452,28 @@ class Scene {
 
 
 $Rocket = [Rocket]::new(0, 0)
-$Player = [Player]::new(5, 5, 1, $PlayerGraphics, $Rocket)
+$Player = [Player]::new(5, 5, 25, $Rocket)
 $Scene = [Scene]::new($Player, $RawUI)
-
-$HiveMind = [HiveMind]::new($Scene)
 $Scene.NonPlayerObjects.Add($Rocket)
-
-$HiveMind.PrepareInvasion()
-
-
-
-
-
 
 
 
 $Timer = [System.Diagnostics.Stopwatch]::StartNew()
 $LastTimestamp = $Timer.ElapsedMilliseconds
 
-#Clear-Host
+Clear-Host
 
 while ( $Scene.IsRunning ) {
     $NewTimeStamp = $Timer.ElapsedMilliseconds
     $DeltaTime = ($NewTimeStamp - $LastTimestamp) / 1000
     $LastTimestamp = $NewTimeStamp
 
-
-    
     $Scene.Update($DeltaTime, $Scene)
-    $HiveMind.Advance($DeltaTime, $Scene)
-    $SceneBuffer = $Scene.GetBuffer()
-    $RawUI.SetBufferContents( @{X = 0; Y = 0 }, $SceneBuffer)
-   
+
+    # Do not redraw if game is over
+    if($Scene.IsRunning) {
+        $SceneBuffer = $Scene.GetBuffer()
+        $RawUI.SetBufferContents( @{X = 0; Y = 0 }, $SceneBuffer)
+    }
+    
 }
